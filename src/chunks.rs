@@ -17,13 +17,13 @@ pub enum ChunkError {
 }
 
 // TODO rename 'build'
-pub trait Chunk {
+pub trait Chunk<'a> {
     fn parse(
         buffer: Buffer<impl Read + Seek>,
         id: ChunkID,
     ) -> Result<Self, ChunkError>
     where
-        Self: Sized;
+        Self: Sized + 'a;
 }
 
 // TODO different form chunks based on parsing options? lighter weight
@@ -126,7 +126,7 @@ impl FormChunk {
     }
 }
 
-impl Chunk for FormChunk {
+impl Chunk<'_> for FormChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -171,7 +171,7 @@ pub struct CommonChunk {
     pub sample_rate: f64, // 80 bit extended floating pt num
 }
 
-impl Chunk for CommonChunk {
+impl Chunk<'_> for CommonChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -215,7 +215,7 @@ pub struct SoundDataChunk {
     pub sound_data: Vec<u8>,
 }
 
-impl Chunk for SoundDataChunk {
+impl Chunk<'_> for SoundDataChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -229,8 +229,9 @@ impl Chunk for SoundDataChunk {
         let block_size = reader::read_u32_be(buf);
 
         // TODO some sort of streaming read optimization?
-        let sound_size = size - 8; // account for offset + block size bytes
-        let mut sound_data = vec![0u8; sound_size as usize];
+        // let sound_size = size - 8; // account for offset + block size bytes
+        let mut sound_data = vec![0u8; size as usize];
+        // let mut sound_data = vec![0u8; sound_size as usize];
 
         buf.read_exact(&mut sound_data).unwrap();
 
@@ -273,7 +274,7 @@ pub struct MarkerChunk {
     pub markers: Vec<Marker>,
 }
 
-impl Chunk for MarkerChunk {
+impl Chunk<'_> for MarkerChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -314,7 +315,7 @@ pub struct TextChunk {
     pub text: String,
 }
 
-impl Chunk for TextChunk {
+impl Chunk<'_> for TextChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -383,7 +384,7 @@ pub struct InstrumentChunk {
     release_loop: Loop,
 }
 
-impl Chunk for InstrumentChunk {
+impl Chunk<'_> for InstrumentChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -425,7 +426,7 @@ pub struct MIDIDataChunk {
     data: Vec<u8>,
 }
 
-impl Chunk for MIDIDataChunk {
+impl Chunk<'_> for MIDIDataChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -451,7 +452,7 @@ pub struct AudioRecordingChunk {
     data: [u8; 24],
 }
 
-impl Chunk for AudioRecordingChunk {
+impl Chunk<'_> for AudioRecordingChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -479,7 +480,7 @@ pub struct ApplicationSpecificChunk {
     data: Vec<i8>,
 }
 
-impl Chunk for ApplicationSpecificChunk {
+impl Chunk<'_> for ApplicationSpecificChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -536,7 +537,7 @@ pub struct CommentsChunk {
     comments: Vec<Comment>,
 }
 
-impl Chunk for CommentsChunk {
+impl Chunk<'_> for CommentsChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -575,11 +576,27 @@ impl Chunk for CommentsChunk {
 // TODO store id3 franes
 #[derive(Debug)]
 pub struct ID3v2Chunk {
-    version: [u8; 2],
+    // // version: [u8; 2],
+    // pub artist: Option<String>,
+    // pub album: Option<String>,
+    // pub album_artist: Option<String>,
+    // pub date_recorded: Option<id3::Timestamp>,
+    // pub date_released: Option<id3::Timestamp>,
+    // pub disc: Option<u32>,
+    // pub duration: Option<u32>,
+    // pub genre: Option<String>,
+    // // // pictures: Option<&'a id3::frame::Picture>,
+    // // pictures: Vec<id3::frame::Picture>,
+    // // title: Option<&'a str>,
+    // // total_discs: Option<u32>,
+    // // total_tracks: Option<u32>,
+    // // track: Option<u32>,
+    // // year: Option<i32>,
+    pub tag: id3::Tag,
 }
 
 // should this be an optional feature? maybe consumer already has id3 parsing
-impl Chunk for ID3v2Chunk {
+impl Chunk<'_> for ID3v2Chunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
@@ -601,9 +618,78 @@ impl Chunk for ID3v2Chunk {
 
         // buffer MUST start with "ID3" or this call will fail
         let tag = id3::Tag::read_from(buf).unwrap();
-        let frames: Vec<_> = tag.frames().collect();
+        // // let mut _artist = "";
+        // // let artist = tag.artist().unwrap().to_owned();
+        // // let artist = Some(tag.artist().unwrap_or_default().to_owned());
+        // let artist = match tag.artist() {
+        //     Some(item) => Some(item.to_owned()),
+        //     None => None
+        // };
+        // // let album = tag.album().to_owned();
+        // // let album = Some(tag.album().unwrap_or_default().to_owned());
+        // let album = match tag.album() {
+        //     Some(item) => Some(item.to_owned()),
+        //     None => None,
+        // };
+        // // let album_artist = tag.album_artist().to_owned();
+        // // let album_artist = Some(tag.album_artist().unwrap_or_default().to_owned());
+        // let album_artist = match tag.album_artist() {
+        //     Some(item) => Some(item.to_owned()),
+        //     None => None,
+        // };
+        // // let comments = tag.comments();
+        // let date_recorded = tag.date_recorded().to_owned();
+        // // let date_recorded = Some(tag.date_recorded().to_owned());
+        // let date_released = tag.date_released().to_owned();
+        // let disc = tag.disc().to_owned();
+        // let duration = tag.duration().to_owned();
+        // // let extended_links = tag.extended_links();
+        // // let extended_texts = tag.extended_texts();
+        // // let genre = tag.genre().to_owned();
+        // let genre = match tag.genre() {
+        //     Some(item) => Some(item.to_owned()),
+        //     None => None,
+        // };
+        // // let lyrics = tag.lyrics();
+        // let pictures = tag.pictures();
+        // let title = tag.title().to_owned();
+        // let total_discs = tag.total_discs().to_owned();
+        // let total_tracks = tag.total_tracks().to_owned();
+        // let track = tag.track().to_owned();
+        // let year = tag.year().to_owned();
+
+        // println!("artist: {:?}, album: {:?}, album_artist: {:?}, date_recorded: {:?}, date_released: {:?}, disc: {:?}, duration: {:?}, genre: {:?}, title: {:?}, total_discs: {:?}
+        //           total_tracks: {:?}, track: {:?}, year: {:?}", 
+        //          artist, album, album_artist, date_recorded, date_released, disc, duration, genre,
+        //          title, total_discs, total_tracks, track, year);
+
+        // let picture: Vec<_> = pictures.collect();
+        // let picture: Vec<_> = pictures.into_iter().map(|item| item.to_owned()).collect();
+        // println!("picture: {:?}", picture);
+        
+        // let frames: Vec<_> = tag.frames().collect();
         // println!("id3 frames {:?}", frames);
 
-        Ok(ID3v2Chunk { version })
+        // Ok(ID3v2Chunk { version })
+
+        // Ok(ID3v2Chunk {
+        //     artist,
+        //     album,
+        //     album_artist,
+        //     date_recorded,
+        //     date_released,
+        //     disc,
+        //     duration,
+        //     genre,
+        //     // pictures: picture,
+        //     // title,
+        //     // total_discs,
+        //     // total_tracks,
+        //     // track,
+        //     // year,
+        // })
+        Ok(ID3v2Chunk {
+            tag,
+        })
     }
 }

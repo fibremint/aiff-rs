@@ -13,9 +13,10 @@ pub type Buffer<'a, Source> = &'a mut BufReader<Source>;
 // AiffAudioReader / AiffCompleteReader (id3 optional)
 pub struct AiffReader<Source> {
     buf: BufReader<Source>,
-    form_chunk: Option<FormChunk>,
+    pub form_chunk: Option<FormChunk>,
     // pub id3v1_tags: Vec<chunks::ID3v1Chunk>, // should this be optional? or separate
-    id3v2_tags: Vec<chunks::ID3v2Chunk>, // should this be optional? or separate
+    // pub id3v2_tags: Vec<chunks::ID3v2Chunk>, // should this be optional? or separate
+    pub id3v2_tag: Option<id3::Tag>,
 }
 
 impl<Source: Read + Seek> AiffReader<Source> {
@@ -23,7 +24,8 @@ impl<Source: Read + Seek> AiffReader<Source> {
         AiffReader {
             buf: BufReader::new(s),
             form_chunk: None,
-            id3v2_tags: vec![],
+            id3v2_tag: None,
+            // id3v2_tags: vec![],
             // id3v1_tags: vec![],
         }
     }
@@ -118,7 +120,8 @@ impl<Source: Read + Seek> AiffReader<Source> {
                 [73, 68, 51, _] => {
                     self.buf.seek(SeekFrom::Current(-4)).unwrap();
                     match chunks::ID3v2Chunk::parse(&mut self.buf, id) {
-                        Ok(chunk) => self.id3v2_tags.push(chunk),
+                        // Ok(chunk) => self.id3v2_tags.push(chunk),
+                        Ok(chunk) => self.id3v2_tag = Some(chunk.tag),
                         Err(e) => {
                             println!("Build ID3 chunk failed {:?}", e);
                             self.buf.seek(SeekFrom::Current(3)).unwrap();
@@ -128,7 +131,8 @@ impl<Source: Read + Seek> AiffReader<Source> {
                 [_, 73, 68, 51] => {
                     self.buf.seek(SeekFrom::Current(-3)).unwrap();
                     match chunks::ID3v2Chunk::parse(&mut self.buf, id) {
-                        Ok(chunk) => self.id3v2_tags.push(chunk),
+                        // Ok(chunk) => self.id3v2_tags.push(chunk),
+                        Ok(chunk) => self.id3v2_tag = Some(chunk.tag),
                         Err(e) => {
                             println!("Build ID3 chunk failed {:?}", e);
                             self.buf.seek(SeekFrom::Current(3)).unwrap();
