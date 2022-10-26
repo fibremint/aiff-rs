@@ -21,7 +21,9 @@ pub trait Chunk<'a> {
     fn parse(
         buffer: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<Self, ChunkError>
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<Self>, ChunkError>
     where
         Self: Sized + 'a;
 }
@@ -32,7 +34,7 @@ pub trait Chunk<'a> {
 // CompletedFormChunkWithMeta, with all metadata
 #[derive(Debug)]
 pub struct FormChunk {
-    size: i32,                     // required
+    // size: i32,                     // required
     common: Option<CommonChunk>,   // required
     sound: Option<SoundDataChunk>, // required if num_sample_frames > 0
     comments: Option<CommentsChunk>,
@@ -130,29 +132,44 @@ impl Chunk<'_> for FormChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<FormChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<FormChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::FORM {
             return Err(ChunkError::InvalidID(id));
         }
 
         let size = reader::read_i32_be(buf);
         println!("form chunk bytes {}", size);
+
+        if !read_data {
+            buf.seek(SeekFrom::Current(4)).unwrap();
+
+            return Ok(None);
+        }
+
         let mut form_type = [0; 4];
         buf.read_exact(&mut form_type).unwrap();
 
         match &form_type {
-            ids::AIFF => Ok(FormChunk {
-                size,
-                common: None,
-                sound: None,
-                comments: None,
-                instrument: None,
-                recording: None,
-                texts: None,
-                markers: None,
-                midi: None,
-                apps: None,
-            }),
+            ids::AIFF => Ok(Some(
+                FormChunk {
+                    // size,
+                    common: None,
+                    sound: None,
+                    comments: None,
+                    instrument: None,
+                    recording: None,
+                    texts: None,
+                    markers: None,
+                    midi: None,
+                    apps: None,
+                }
+            )),
             ids::AIFF_C => {
                 println!("aiff c file detected; unsupported");
                 Err(ChunkError::InvalidFormType(form_type))
@@ -175,7 +192,13 @@ impl Chunk<'_> for CommonChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<CommonChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<CommonChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::COMMON {
             return Err(ChunkError::InvalidID(id));
         }
@@ -187,6 +210,12 @@ impl Chunk<'_> for CommonChunk {
             reader::read_i16_be(buf),
         );
 
+        if !read_data {
+            buf.seek(SeekFrom::Current(10)).unwrap();
+
+            return Ok(None)
+        }
+        
         let mut rate_buf = [0; 10]; // 1 bit sign, 15 bits exponent
         buf.read_exact(&mut rate_buf).unwrap();
 
@@ -197,13 +226,15 @@ impl Chunk<'_> for CommonChunk {
             }
         };
 
-        Ok(CommonChunk {
-            size,
-            num_channels,
-            num_sample_frames,
-            bit_rate,
-            sample_rate,
-        })
+        Ok(Some(
+            CommonChunk {
+                size,
+                num_channels,
+                num_sample_frames,
+                bit_rate,
+                sample_rate,
+            }
+        ))
     }
 }
 
@@ -219,7 +250,13 @@ impl Chunk<'_> for SoundDataChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<SoundDataChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<SoundDataChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::SOUND {
             return Err(ChunkError::InvalidID(id));
         }
@@ -228,6 +265,12 @@ impl Chunk<'_> for SoundDataChunk {
         let offset = reader::read_u32_be(buf);
         let block_size = reader::read_u32_be(buf);
 
+        if !read_data {
+            buf.seek(SeekFrom::Current(size as i64)).unwrap();
+
+            return Ok(None);
+        }
+
         // TODO some sort of streaming read optimization?
         // let sound_size = size - 8; // account for offset + block size bytes
         let mut sound_data = vec![0u8; size as usize];
@@ -235,12 +278,14 @@ impl Chunk<'_> for SoundDataChunk {
 
         buf.read_exact(&mut sound_data).unwrap();
 
-        Ok(SoundDataChunk {
-            size,
-            offset,
-            block_size,
-            sound_data,
-        })
+        Ok(Some(
+            SoundDataChunk {
+                size,
+                offset,
+                block_size,
+                sound_data,
+            }
+        ))
     }
 }
 
@@ -278,13 +323,23 @@ impl Chunk<'_> for MarkerChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<MarkerChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<MarkerChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::MARKER {
             return Err(ChunkError::InvalidID(id));
         }
 
         let size = reader::read_i32_be(buf);
         let num_markers = reader::read_u16_be(buf);
+
+        // if !read_data {
+        //     buf.seek(pos)
+        // }
         let mut markers = Vec::with_capacity(num_markers as usize);
         // is it worth it to read all markers at once ant create from buf?
         // or does the usage of BufReader make it irrelevant?
@@ -292,11 +347,13 @@ impl Chunk<'_> for MarkerChunk {
             markers.push(Marker::from_reader(buf));
         }
 
-        Ok(MarkerChunk {
-            size,
-            num_markers,
-            markers,
-        })
+        Ok(Some(
+            MarkerChunk {
+                size,
+                num_markers,
+                markers,
+            }
+        ))
     }
 }
 
@@ -319,7 +376,13 @@ impl Chunk<'_> for TextChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<TextChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<TextChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         let chunk_type = match &id {
             ids::NAME => TextChunkType::Name,
             ids::AUTHOR => TextChunkType::Author,
@@ -329,20 +392,31 @@ impl Chunk<'_> for TextChunk {
         };
 
         let size = reader::read_i32_be(buf);
+        let buf_pos_offset = if size % 2 > 0 { 1 } else { 0 };
+
+        if !read_data {
+            buf.seek(SeekFrom::Current(size as i64 + buf_pos_offset)).unwrap();
+
+            return Ok(None);
+        }
+
         let mut text_bytes = vec![0; size as usize];
         buf.read_exact(&mut text_bytes).unwrap();
         let text = String::from_utf8(text_bytes).unwrap();
 
-        if size % 2 > 0 {
-            // if odd, pad byte present - skip it
-            buf.seek(SeekFrom::Current(1)).unwrap();
-        }
+        buf.seek(SeekFrom::Current(buf_pos_offset)).unwrap();
+        // if size % 2 > 0 {
+        //     // if odd, pad byte present - skip it
+        //     buf.seek(SeekFrom::Current(1)).unwrap();
+        // }
 
-        Ok(TextChunk {
-            chunk_type,
-            size,
-            text,
-        })
+        Ok(Some(
+            TextChunk {
+                chunk_type,
+                size,
+                text,
+            }
+        ))
     }
 }
 
@@ -388,7 +462,13 @@ impl Chunk<'_> for InstrumentChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<InstrumentChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<InstrumentChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::INSTRUMENT {
             return Err(ChunkError::InvalidID(id));
         }
@@ -405,18 +485,20 @@ impl Chunk<'_> for InstrumentChunk {
         let sustain_loop = Loop::from_reader(buf);
         let release_loop = Loop::from_reader(buf);
 
-        Ok(InstrumentChunk {
-            size,
-            base_note,
-            detune,
-            low_note,
-            high_note,
-            low_velocity,
-            high_velocity,
-            gain,
-            sustain_loop,
-            release_loop,
-        })
+        Ok(Some(
+            InstrumentChunk {
+                size,
+                base_note,
+                detune,
+                low_note,
+                high_note,
+                low_velocity,
+                high_velocity,
+                gain,
+                sustain_loop,
+                release_loop,
+            }
+        ))
     }
 }
 
@@ -430,17 +512,31 @@ impl Chunk<'_> for MIDIDataChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<MIDIDataChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<MIDIDataChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::MIDI {
             return Err(ChunkError::InvalidID(id));
         }
 
         let size = reader::read_i32_be(buf);
 
+        if !read_data {
+            buf.seek(SeekFrom::Current(size as i64)).unwrap();
+
+            return Ok(None);
+        }
+
         let mut data = vec![0; size as usize];
         buf.read_exact(&mut data).unwrap();
 
-        Ok(MIDIDataChunk { size, data })
+        Ok(Some(
+            MIDIDataChunk { size, data }
+        ))
     }
 }
 
@@ -456,7 +552,13 @@ impl Chunk<'_> for AudioRecordingChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<AudioRecordingChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<AudioRecordingChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::RECORDING {
             return Err(ChunkError::InvalidID(id));
         }
@@ -466,10 +568,16 @@ impl Chunk<'_> for AudioRecordingChunk {
             return Err(ChunkError::InvalidSize(24, size));
         }
 
+        if !read_data {
+            buf.seek(SeekFrom::Current(24)).unwrap();
+
+            return Ok(None);
+        }
+
         let mut data = [0; 24];
         buf.read_exact(&mut data).unwrap();
 
-        Ok(AudioRecordingChunk { size, data })
+        Ok(Some(AudioRecordingChunk { size, data }))
     }
 }
 
@@ -484,21 +592,36 @@ impl Chunk<'_> for ApplicationSpecificChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<ApplicationSpecificChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<ApplicationSpecificChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::APPLICATION {
             return Err(ChunkError::InvalidID(id));
         }
 
         let size = reader::read_i32_be(buf);
         let application_signature = reader::read_chunk_id(buf); // TODO verify
+        
+        if !read_data {
+            buf.seek(SeekFrom::Current((size - 4) as i64)).unwrap();
+
+            return Ok(None);
+        }
+        
         let mut data = vec![0; (size - 4) as usize]; // account for sig size
         buf.read_exact(&mut data).unwrap();
 
-        Ok(ApplicationSpecificChunk {
-            size,
-            application_signature,
-            data: data.iter().map(|byte| i8::from_be_bytes([*byte])).collect(),
-        })
+        Ok(Some(
+            ApplicationSpecificChunk {
+                size,
+                application_signature,
+                data: data.iter().map(|byte| i8::from_be_bytes([*byte])).collect(),
+            }
+        ))
     }
 }
 
@@ -541,7 +664,13 @@ impl Chunk<'_> for CommentsChunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<CommentsChunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<CommentsChunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id != ids::COMMENTS {
             return Err(ChunkError::InvalidID(id));
         }
@@ -554,11 +683,13 @@ impl Chunk<'_> for CommentsChunk {
             comments.push(Comment::from_reader(buf))
         }
 
-        Ok(CommentsChunk {
-            size,
-            num_comments,
-            comments,
-        })
+        Ok(Some(
+            CommentsChunk {
+                size,
+                num_comments,
+                comments,
+            }
+        ))
     }
 }
 
@@ -600,7 +731,13 @@ impl Chunk<'_> for ID3v2Chunk {
     fn parse(
         buf: Buffer<impl Read + Seek>,
         id: ChunkID,
-    ) -> Result<ID3v2Chunk, ChunkError> {
+        read_data: bool,
+        curr_buf_pos: &mut Option<u64>
+    ) -> Result<Option<ID3v2Chunk>, ChunkError> {
+        if let Some(ref mut pos) = curr_buf_pos {
+            *pos = buf.position();
+        }
+
         if &id[0..3] != ids::ID3 && &id[1..] != ids::ID3 {
             return Err(ChunkError::InvalidID(id));
         }
@@ -688,8 +825,10 @@ impl Chunk<'_> for ID3v2Chunk {
         //     // track,
         //     // year,
         // })
-        Ok(ID3v2Chunk {
-            tag,
-        })
+        Ok(Some(
+            ID3v2Chunk {
+                tag,
+            }
+        ))
     }
 }

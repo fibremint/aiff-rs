@@ -4,7 +4,8 @@ use super::{
     samples::SampleType,
 };
 use seek_bufread::BufReader;
-use std::io::{Read, Seek, SeekFrom};
+use std::{io::{Read, Seek, SeekFrom}, hash::Hash, convert::TryInto};
+use std::collections::HashMap;
 
 pub type Buffer<'a, Source> = &'a mut BufReader<Source>;
 
@@ -17,6 +18,7 @@ pub struct AiffReader<Source> {
     // pub id3v1_tags: Vec<chunks::ID3v1Chunk>, // should this be optional? or separate
     // pub id3v2_tags: Vec<chunks::ID3v2Chunk>, // should this be optional? or separate
     pub id3v2_tag: Option<id3::Tag>,
+    form_buf_locations: HashMap<String, u64>,
 }
 
 impl<Source: Read + Seek> AiffReader<Source> {
@@ -25,14 +27,47 @@ impl<Source: Read + Seek> AiffReader<Source> {
             buf: BufReader::new(s),
             form_chunk: None,
             id3v2_tag: None,
+            form_buf_locations: HashMap::new(),
             // id3v2_tags: vec![],
             // id3v1_tags: vec![],
         }
     }
 
-    pub fn read(&mut self) -> Result<(), chunks::ChunkError> {
+    pub fn read_all_form_data(&mut self) {
+        self.analyze_data(true, false).unwrap();
+    }
+
+    pub fn parse_form_location(&mut self) -> Result<(), chunks::ChunkError> {
+        self.analyze_data(false, true).unwrap();
+
+        Ok(())
+    }
+
+    pub fn read_chunk<'a, T: Chunk<'a> + 'a> (&mut self, read_data: bool, record_form_pos: bool, chunk_id: &[u8]) -> Option<T> {
+        let tag_id = String::from_utf8(chunk_id.to_vec()).unwrap();
+        let mut form_pos = if record_form_pos { Some(0) } else { None };
+
+        if let Some(seek_pos) = self.form_buf_locations.get(&tag_id) {
+            self.buf.seek(SeekFrom::Start(*seek_pos)).unwrap();
+        }
+
+        let chunk = T::parse(&mut self.buf, chunk_id.try_into().unwrap(), read_data, &mut form_pos).unwrap();
+
+        if let Some(pos) = form_pos {
+            self.form_buf_locations.insert(tag_id, pos);
+        }
+
+        chunk
+    }
+
+    fn analyze_data(&mut self, read_data: bool, record_form_pos: bool) -> Result<(), chunks::ChunkError> {
+        self.buf.rewind().unwrap();
+
         let form_id = read_chunk_id(&mut self.buf);
-        let mut form = FormChunk::parse(&mut self.buf, form_id)?;
+        let mut form = match self.read_chunk::<chunks::FormChunk>(true, record_form_pos, &form_id) {
+            Some(item) => item,
+            None => return Err(chunks::ChunkError::InvalidData("failed to parse form data"))
+        };
 
         while self.buf.available() >= 4 {
             let id = read_chunk_id(&mut self.buf);
@@ -41,74 +76,50 @@ impl<Source: Read + Seek> AiffReader<Source> {
             // buffer position is right past the id
             match &id {
                 ids::COMMON => {
-                    println!("Common chunk detected");
-                    let common =
-                        chunks::CommonChunk::parse(&mut self.buf, id).unwrap();
-                    println!(
-                        "channels {} frames {} bit rate {} sample rate {}",
-                        common.num_channels,
-                        common.num_sample_frames,
-                        common.bit_rate,
-                        common.sample_rate
-                    );
-                    form.set_common(common);
+                    // println!("Common chunk detected");
+                    if let Some(common) = self.read_chunk::<chunks::CommonChunk>(read_data, record_form_pos, &id) {
+                        form.set_common(common);
+                    }
                 }
                 ids::SOUND => {
-                    let sound =
-                        chunks::SoundDataChunk::parse(&mut self.buf, id)
-                            .unwrap();
-                    println!(
-                        "SOUND chunk detected size {} offset {} block size {}",
-                        sound.size, sound.offset, sound.block_size
-                    );
-                    form.set_sound(sound);
+                    if let Some(sound) = self.read_chunk::<chunks::SoundDataChunk>(read_data, record_form_pos, &id) {
+                        form.set_sound(sound);
+                    }
                 }
                 ids::MARKER => {
-                    let mark =
-                        chunks::MarkerChunk::parse(&mut self.buf, id).unwrap();
-                    println!("MARKER chunk detected {:?}", mark);
-                    form.add_marker_chunk(mark);
+                    if let Some(mark) = self.read_chunk::<chunks::MarkerChunk>(read_data, record_form_pos, &id) {
+                        form.add_marker_chunk(mark);
+                    }
                 }
                 ids::INSTRUMENT => {
-                    let inst =
-                        chunks::InstrumentChunk::parse(&mut self.buf, id)
-                            .unwrap();
-                    println!("INSTRUMENT chunk detected {:?}", inst);
-                    form.set_instrument(inst);
+                    if let Some(inst) = self.read_chunk::<chunks::InstrumentChunk>(read_data, record_form_pos, &id) {
+                        form.set_instrument(inst);
+                    }
                 }
                 ids::MIDI => {
-                    let midi = chunks::MIDIDataChunk::parse(&mut self.buf, id)
-                        .unwrap();
-                    println!("MIDI chunk detected {:?}", midi);
-                    form.add_midi_chunk(midi);
+                    if let Some(midi) = self.read_chunk::<chunks::MIDIDataChunk>(read_data, record_form_pos, &id) {
+                        form.add_midi_chunk(midi);
+                    }
                 }
                 ids::RECORDING => {
-                    let rec =
-                        chunks::AudioRecordingChunk::parse(&mut self.buf, id)
-                            .unwrap();
-                    println!("RECORDING chunk detected {:?}", rec);
-                    form.set_recording(rec);
+                    if let Some(midi) = self.read_chunk::<chunks::AudioRecordingChunk>(read_data, record_form_pos, &id) {
+                        form.set_recording(midi);
+                    }
                 }
                 ids::APPLICATION => {
-                    let app = chunks::ApplicationSpecificChunk::parse(
-                        &mut self.buf,
-                        id,
-                    )
-                    .unwrap();
-                    println!("APPLICATION chunk detected {:?}", app);
-                    form.add_app_chunk(app);
+                    if let Some(app) = self.read_chunk::<chunks::ApplicationSpecificChunk>(read_data, record_form_pos, &id) {
+                        form.add_app_chunk(app);
+                    }
                 }
                 ids::COMMENTS => {
-                    let comm = chunks::CommentsChunk::parse(&mut self.buf, id)
-                        .unwrap();
-                    println!("COMMENT chunk detected {:?}", comm);
-                    form.set_comments(comm);
+                    if let Some(comm) = self.read_chunk::<chunks::CommentsChunk>(read_data, record_form_pos, &id) {
+                        form.set_comments(comm);
+                    }
                 }
                 ids::NAME | ids::AUTHOR | ids::COPYRIGHT | ids::ANNOTATION => {
-                    let text =
-                        chunks::TextChunk::parse(&mut self.buf, id).unwrap();
-                    println!("TEXT chunk detected: {}", text.text);
-                    form.add_text_chunk(text);
+                    if let Some(text) = self.read_chunk::<chunks::TextChunk>(read_data, record_form_pos, &id) {
+                        form.add_text_chunk(text);
+                    }
                 }
                 ids::FVER => {
                     unimplemented!("FVER chunk detected");
@@ -119,25 +130,30 @@ impl<Source: Read + Seek> AiffReader<Source> {
                 // be stored next to the form chunk in the reader?
                 [73, 68, 51, _] => {
                     self.buf.seek(SeekFrom::Current(-4)).unwrap();
-                    match chunks::ID3v2Chunk::parse(&mut self.buf, id) {
+
+                    match self.read_chunk::<chunks::ID3v2Chunk>(read_data, record_form_pos, &id) {
                         // Ok(chunk) => self.id3v2_tags.push(chunk),
-                        Ok(chunk) => self.id3v2_tag = Some(chunk.tag),
-                        Err(e) => {
-                            println!("Build ID3 chunk failed {:?}", e);
+                        Some(chunk) => self.id3v2_tag = Some(chunk.tag),
+                        None => {
+                            println!("Build ID3 chunk failed");
                             self.buf.seek(SeekFrom::Current(3)).unwrap();
-                        }
+                        },
+                        _ => ()
                     }
                 }
                 [_, 73, 68, 51] => {
                     self.buf.seek(SeekFrom::Current(-3)).unwrap();
-                    match chunks::ID3v2Chunk::parse(&mut self.buf, id) {
+
+                    match self.read_chunk::<chunks::ID3v2Chunk>(read_data, record_form_pos, ids::ID3) {
                         // Ok(chunk) => self.id3v2_tags.push(chunk),
-                        Ok(chunk) => self.id3v2_tag = Some(chunk.tag),
-                        Err(e) => {
-                            println!("Build ID3 chunk failed {:?}", e);
+                        Some(chunk) => self.id3v2_tag = Some(chunk.tag),
+                        None => {
+                            println!("Build ID3 chunk failed");
                             self.buf.seek(SeekFrom::Current(3)).unwrap();
-                        }
+                        },
+                        _ => ()
                     }
+
                 }
                 [84, 65, 71, _] => println!("v1 id3"), // "TAG_"
                 [_, 84, 65, 71] => println!("v1 id3"), // "_TAG"

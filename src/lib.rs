@@ -5,7 +5,7 @@ extern crate seek_bufread;
 
 pub mod chunks;
 mod extended;
-mod ids;
+pub mod ids;
 pub mod reader;
 mod samples;
 
