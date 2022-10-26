@@ -18,7 +18,12 @@ pub struct AiffReader<Source> {
     // pub id3v1_tags: Vec<chunks::ID3v1Chunk>, // should this be optional? or separate
     // pub id3v2_tags: Vec<chunks::ID3v2Chunk>, // should this be optional? or separate
     pub id3v2_tag: Option<id3::Tag>,
-    form_buf_locations: HashMap<String, u64>,
+    pub form_buf_locations: HashMap<String, u64>,
+}
+
+pub struct SoundDataMeta {
+    pub data_offset: u64,
+    pub metadata: chunks::CommonChunk
 }
 
 impl<Source: Read + Seek> AiffReader<Source> {
@@ -37,10 +42,22 @@ impl<Source: Read + Seek> AiffReader<Source> {
         self.analyze_data(true, false).unwrap();
     }
 
-    pub fn parse_form_location(&mut self) -> Result<(), chunks::ChunkError> {
+    pub fn parse(&mut self) -> Result<(), chunks::ChunkError> {
         self.analyze_data(false, true).unwrap();
 
         Ok(())
+    }
+
+    pub fn get_sound_data_metadata(&mut self) -> SoundDataMeta {
+        let sound_data_tag_id = String::from_utf8(ids::SOUND.to_vec()).unwrap();
+        let sound_data_offset = self.form_buf_locations.get(&sound_data_tag_id).unwrap().to_owned();
+
+        let common = self.read_chunk::<chunks::CommonChunk>(true, false, ids::COMMON).unwrap();
+        
+        SoundDataMeta { 
+            data_offset: sound_data_offset, 
+            metadata: common,
+        }
     }
 
     pub fn read_chunk<'a, T: Chunk<'a> + 'a> (&mut self, read_data: bool, record_form_pos: bool, chunk_id: &[u8]) -> Option<T> {
